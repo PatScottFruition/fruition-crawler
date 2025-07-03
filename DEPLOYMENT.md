@@ -70,11 +70,56 @@ No environment variables are required for basic functionality. The app works out
 
 ## 🛠️ Troubleshooting
 
-### Common Issues:
-1. **Slow Loading**: Increase timeout settings in Advanced Options
-2. **Memory Issues**: Reduce max pages for large sites
-3. **SSL Errors**: The crawler handles most SSL issues automatically
+### Common Deployment Issues:
+
+#### 1. **lxml Build Errors on Streamlit Cloud**
+**Error**: `Error: Please make sure the libxml2 and libxslt development packages are installed`
+
+**Solution**: ✅ **Fixed!** We've updated the requirements.txt to use:
+- `lxml>=4.9.0,<5.0.0` (more compatible version)
+- `html.parser` as primary BeautifulSoup parser (built into Python)
+
+#### 2. **Dependency Version Conflicts**
+**Error**: Package version conflicts during deployment
+
+**Solution**: ✅ **Fixed!** We use flexible version ranges:
+```
+streamlit>=1.32.0
+aiohttp>=3.9.0
+beautifulsoup4>=4.12.0
+```
+
+#### 3. **Memory Issues on Free Tier**
+**Symptoms**: App crashes or becomes unresponsive
+
+**Solutions**:
+- Reduce max pages to 25-30 for large sites
+- Use URL filtering to focus on specific sections
+- Increase timeout settings in Advanced Options
+
+#### 4. **Slow Performance**
+**Solutions**:
+- Increase delay between requests (Advanced Options)
+- Reduce max depth for broad sites
+- Use include patterns to target specific areas
+
+### Runtime Issues:
+
+#### 1. **SSL Certificate Errors**
+**Solution**: The crawler automatically handles most SSL issues with relaxed certificate validation
+
+#### 2. **Timeout Errors**
+**Solution**: Increase request timeout in Advanced Options (default: 30s)
+
+#### 3. **Rate Limiting**
+**Solution**: Increase delay range in Advanced Options or respect robots.txt crawl-delay
 
 ### Support:
-- GitHub Issues: [Report bugs here](https://github.com/PatScottFruition/fruition-crawler/issues)
-- Documentation: See README.md for full usage guide
+- **GitHub Issues**: [Report bugs here](https://github.com/PatScottFruition/fruition-crawler/issues)
+- **Documentation**: See README.md for full usage guide
+- **Deployment Logs**: Check Streamlit Cloud logs for specific error details
+
+### Quick Fixes:
+1. **Redeploy**: Sometimes a simple redeploy fixes temporary issues
+2. **Clear Cache**: Use "Clear Crawl" button to reset session state
+3. **Restart App**: Use "Reboot app" in Streamlit Cloud dashboard
