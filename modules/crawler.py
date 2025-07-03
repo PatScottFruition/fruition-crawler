@@ -184,10 +184,16 @@ class SEOCrawler:
                         content = await response.text()
                     
                     # Parse XML
-                    urls = self._parse_sitemap_xml(content)
+                    urls, nested_sitemaps = self._parse_sitemap_xml(content)
                     self.sitemap_urls.extend(urls)
                     
-                    if urls:
+                    # Process nested sitemaps if this was a sitemap index
+                    if nested_sitemaps:
+                        print(f"Processing {len(nested_sitemaps)} nested sitemaps from sitemap index")
+                        for nested_sitemap_url in nested_sitemaps:
+                            await self._fetch_and_parse_sitemap(nested_sitemap_url)
+                    
+                    if urls or nested_sitemaps:
                         self.sitemap_status = f"Found {len(self.sitemap_urls)} URLs from sitemaps"
                     else:
                         self.sitemap_status = "Sitemap found but no URLs extracted"
@@ -196,9 +202,10 @@ class SEOCrawler:
         except Exception as e:
             self.sitemap_status = f"Error fetching sitemap: {str(e)}"
     
-    def _parse_sitemap_xml(self, xml_content: str) -> List[str]:
-        """Parse XML sitemap content and extract URLs"""
+    def _parse_sitemap_xml(self, xml_content: str) -> Tuple[List[str], List[str]]:
+        """Parse XML sitemap content and extract URLs or nested sitemap URLs"""
         urls = []
+        nested_sitemaps = []
         try:
             # Remove namespace declarations to simplify parsing
             xml_content = re.sub(r'xmlns[^=]*="[^"]*"', '', xml_content)
@@ -207,12 +214,15 @@ class SEOCrawler:
             
             # Check if this is a sitemap index
             if root.tag.endswith('sitemapindex'):
-                # This is a sitemap index, extract sitemap URLs
+                # This is a sitemap index, extract sitemap URLs for later processing
                 for sitemap in root.findall('.//sitemap'):
                     loc = sitemap.find('loc')
                     if loc is not None and loc.text:
-                        # Recursively fetch nested sitemaps
-                        asyncio.create_task(self._fetch_and_parse_sitemap(loc.text))
+                        nested_sitemap_url = loc.text.strip()
+                        # Only include sitemaps from the same domain
+                        if self._is_same_domain(nested_sitemap_url):
+                            nested_sitemaps.append(nested_sitemap_url)
+                print(f"Found sitemap index with {len(nested_sitemaps)} nested sitemaps")
             else:
                 # This is a regular sitemap, extract page URLs
                 for url_elem in root.findall('.//url'):
@@ -222,12 +232,13 @@ class SEOCrawler:
                         # Only include URLs from the same domain
                         if self._is_same_domain(url):
                             urls.append(url)
+                print(f"Found regular sitemap with {len(urls)} URLs")
         except ET.ParseError as e:
             print(f"Error parsing sitemap XML: {e}")
         except Exception as e:
             print(f"Unexpected error parsing sitemap: {e}")
         
-        return urls
+        return urls, nested_sitemaps
     
     def _get_ssl_context(self):
         """Create SSL context that handles certificate issues"""
