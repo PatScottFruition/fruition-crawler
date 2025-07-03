@@ -311,8 +311,9 @@ def generate_executive_summary(results_df, issues, issue_summary):
 
 async def run_crawl(url, max_pages, max_depth, include_patterns, exclude_patterns, 
                    ignore_noindex, request_timeout, delay_range, respect_robots, 
-                   follow_redirects, use_sitemap, init_progress_bar, init_status_text):
-    """Run the crawler asynchronously"""
+                   follow_redirects, use_sitemap, init_progress_bar, init_status_text, 
+                   crawl_container):
+    """Run the crawler asynchronously with two-phase progress"""
     # Parse patterns
     include_list = [p.strip() for p in include_patterns.split('\n') if p.strip()] if include_patterns else []
     exclude_list = [p.strip() for p in exclude_patterns.split('\n') if p.strip()] if exclude_patterns else []
@@ -334,11 +335,32 @@ async def run_crawl(url, max_pages, max_depth, include_patterns, exclude_pattern
     def init_progress_callback(progress, status):
         init_progress_bar.progress(progress / 100)
         init_status_text.text(status)
+        
+        # When initialization is complete, transition to crawl phase
+        if progress >= 100:
+            # Clear initialization UI and show crawl progress
+            init_progress_bar.empty()
+            init_status_text.empty()
+            
+            # Show crawl progress section
+            with crawl_container.container():
+                st.markdown("### 📄 Crawling Pages")
+                crawl_progress_bar = st.progress(0)
+                crawl_status_text = st.empty()
+                
+                # Store references for crawl progress updates
+                st.session_state.crawl_progress_bar = crawl_progress_bar
+                st.session_state.crawl_status_text = crawl_status_text
     
     def progress_callback(current, total, current_url):
         progress = current / total
         st.session_state.crawl_progress = progress
         st.session_state.current_url = current_url
+        
+        # Update crawl progress if components exist
+        if hasattr(st.session_state, 'crawl_progress_bar') and hasattr(st.session_state, 'crawl_status_text'):
+            st.session_state.crawl_progress_bar.progress(progress)
+            st.session_state.crawl_status_text.text(f"📄 Crawling page {current}/{total}: {current_url}")
     
     results = await crawler.crawl(progress_callback, init_progress_callback)
     return results, crawler
@@ -491,10 +513,6 @@ def main():
             st.session_state.crawl_in_progress = True
             st.session_state.crawl_results = None
             
-            # Create placeholders for progress
-            progress_placeholder = st.empty()
-            status_placeholder = st.empty()
-            
             # Validate delay range
             if delay_min > delay_max:
                 st.error("Min delay cannot be greater than max delay")
@@ -505,6 +523,9 @@ def main():
             st.markdown("### 🔧 Initializing Crawler")
             init_progress_bar = st.progress(0)
             init_status_text = st.empty()
+            
+            # Create container for crawl progress (will be populated later)
+            crawl_container = st.empty()
             
             try:
                 # Run async crawl
@@ -517,13 +538,19 @@ def main():
                         ignore_noindex, request_timeout, 
                         (delay_min, delay_max), respect_robots, 
                         follow_redirects, use_sitemap,
-                        init_progress_bar, init_status_text
+                        init_progress_bar, init_status_text, crawl_container
                     )
                 )
                 
                 st.session_state.crawl_results = results
                 st.session_state.crawler_stats = crawler.get_crawl_stats()
                 st.session_state.crawl_in_progress = False
+                
+                # Clear crawl progress components
+                if hasattr(st.session_state, 'crawl_progress_bar'):
+                    del st.session_state.crawl_progress_bar
+                if hasattr(st.session_state, 'crawl_status_text'):
+                    del st.session_state.crawl_status_text
                 
                 # Enhanced success message with sitemap info
                 stats = crawler.get_crawl_stats()
@@ -536,16 +563,6 @@ def main():
             except Exception as e:
                 st.session_state.crawl_in_progress = False
                 st.error(f"❌ Crawl failed: {str(e)}")
-    
-    # Display progress if crawling
-    if st.session_state.crawl_in_progress:
-        col1, col2, col3 = st.columns([2, 1, 1])
-        with col1:
-            st.progress(st.session_state.crawl_progress)
-            if st.session_state.current_url:
-                st.caption(f"Crawling: {st.session_state.current_url}")
-        with col2:
-            st.metric("Progress", f"{int(st.session_state.crawl_progress * 100)}%")
     
     # Display results
     if st.session_state.crawl_results:
@@ -590,7 +607,7 @@ def main():
         ])
         
         with tab1:
-            st.markdown("### Executive Summary (Sprint 5)")
+            st.markdown("### Executive Summary")
             
             # Generate executive summary
             summary = generate_executive_summary(results_df, issues, issue_summary)
@@ -683,7 +700,7 @@ def main():
         with tab2:
             st.markdown("### All Crawled Pages")
             
-            # Enhanced search and filtering - Sprint 5
+            # Enhanced search and filtering
             st.markdown('<div class="search-container">', unsafe_allow_html=True)
             col1, col2, col3 = st.columns(3)
             
@@ -736,7 +753,7 @@ def main():
             )
         
         with tab3:
-            st.markdown("### Content Analysis (Sprint 3)")
+            st.markdown("### Content Analysis")
             
             # Content Quality Metrics
             col1, col2, col3, col4 = st.columns(4)
@@ -774,232 +791,134 @@ def main():
             # Content Analysis Table
             content_columns = [
                 'Address', 'Word Count', 'Flesch Reading Ease Score', 'Readability',
-                'Paragraph_Count', 'H1_Count', 'H2_Count', 'Internal_Links', 
-                'External_Links', 'Total_Images', 'Alt_Text_Coverage'
+                'Total_Images', 'Images_With_Alt', 'Images_Without_Alt', 'Internal_Links', 'External_Links'
             ]
             
+            # Filter columns that exist in the dataframe
             available_content_columns = [col for col in content_columns if col in results_df.columns]
             
             if available_content_columns:
-                st.markdown("#### Content Quality Analysis")
                 st.dataframe(
                     results_df[available_content_columns],
                     use_container_width=True,
                     height=400
                 )
-            
-            # Structured Data Analysis
-            if 'Schema_Types' in results_df.columns:
-                st.markdown("#### Structured Data Analysis")
-                
-                # Flatten schema types for analysis
-                all_schema_types = []
-                for _, row in results_df.iterrows():
-                    if row.get('Schema_Types') and isinstance(row['Schema_Types'], list):
-                        all_schema_types.extend(row['Schema_Types'])
-                
-                if all_schema_types:
-                    schema_counts = pd.Series(all_schema_types).value_counts()
-                    st.bar_chart(schema_counts)
-                else:
-                    st.info("No structured data found on crawled pages")
+            else:
+                st.info("No content analysis data available")
         
         with tab4:
-            st.markdown("### SEO Issues Found (Sprint 4)")
+            st.markdown("### SEO Issues")
             
-            # Issue Summary Dashboard
-            col1, col2, col3, col4, col5 = st.columns(5)
-            
-            with col1:
-                st.metric("Total Issues", issue_summary['total_issues'])
-            with col2:
-                st.metric("🔴 Critical", issue_summary['critical'], delta_color="inverse")
-            with col3:
-                st.metric("🟠 High", issue_summary['high'], delta_color="inverse")
-            with col4:
-                st.metric("🟡 Medium", issue_summary['medium'], delta_color="inverse")
-            with col5:
-                st.metric("🟢 Low", issue_summary['low'])
-            
-            st.markdown("---")
-            
-            # Issue Category Breakdown
-            if issue_summary['categories']:
-                col1, col2 = st.columns([1, 1])
-                
+            if issues:
+                # Issue summary
+                col1, col2, col3, col4 = st.columns(4)
                 with col1:
-                    st.markdown("#### Issues by Category")
-                    category_df = pd.DataFrame(list(issue_summary['categories'].items()), 
-                                             columns=['Category', 'Count'])
-                    st.bar_chart(category_df.set_index('Category'))
-                
+                    st.metric("Critical", issue_summary['critical'], delta_color="inverse")
                 with col2:
-                    st.markdown("#### Category Breakdown")
-                    for category, count in issue_summary['categories'].items():
-                        st.write(f"**{category}**: {count} issues")
-            
-            st.markdown("---")
-            
-            # Filters
-            col1, col2 = st.columns(2)
-            with col1:
+                    st.metric("High", issue_summary['high'], delta_color="inverse")
+                with col3:
+                    st.metric("Medium", issue_summary['medium'], delta_color="inverse")
+                with col4:
+                    st.metric("Low", issue_summary['low'], delta_color="inverse")
+                
+                st.markdown("---")
+                
+                # Filter issues by severity
                 severity_filter = st.selectbox(
                     "Filter by Severity",
-                    options=["All", "Critical", "High", "Medium", "Low"],
-                    index=0
-                )
-            
-            with col2:
-                category_filter = st.selectbox(
-                    "Filter by Category",
-                    options=["All"] + list(issue_summary['categories'].keys()),
-                    index=0
-                )
-            
-            # Filter issues
-            filtered_issues = issues
-            if severity_filter != "All":
-                filtered_issues = [i for i in filtered_issues if i['Severity'] == severity_filter]
-            if category_filter != "All":
-                filtered_issues = [i for i in filtered_issues if i['Category'] == category_filter]
-            
-            # Display issues
-            if filtered_issues:
-                st.markdown(f"#### Issues Found ({len(filtered_issues)} of {len(issues)})")
-                
-                # Convert to DataFrame for better display
-                issues_df = pd.DataFrame(filtered_issues)
-                
-                # Add severity icons
-                severity_icons = {
-                    'Critical': '🔴',
-                    'High': '🟠', 
-                    'Medium': '🟡',
-                    'Low': '🟢'
-                }
-                issues_df['Severity_Icon'] = issues_df['Severity'].map(severity_icons)
-                issues_df['Severity_Display'] = issues_df['Severity_Icon'] + ' ' + issues_df['Severity']
-                
-                # Display columns
-                display_cols = ['Type', 'Severity_Display', 'URL', 'Description', 'Impact', 'Fix', 'Category']
-                available_cols = [col for col in display_cols if col in issues_df.columns]
-                
-                st.dataframe(
-                    issues_df[available_cols],
-                    use_container_width=True,
-                    height=600,
-                    column_config={
-                        "URL": st.column_config.LinkColumn("URL"),
-                        "Severity_Display": "Severity",
-                        "Description": st.column_config.TextColumn("Description", width="medium"),
-                        "Impact": st.column_config.TextColumn("Impact", width="medium"),
-                        "Fix": st.column_config.TextColumn("Fix Recommendation", width="large")
-                    }
+                    options=["All", "Critical", "High", "Medium", "Low"]
                 )
                 
-                # Detailed Issue View
-                with st.expander("📋 Detailed Issue Analysis"):
-                    for issue in filtered_issues[:10]:  # Show first 10 for performance
-                        with st.container():
-                            severity_color = {
-                                'Critical': '#dc3545',
-                                'High': '#fd7e14', 
-                                'Medium': '#ffc107',
-                                'Low': '#28a745'
-                            }.get(issue['Severity'], '#6c757d')
-                            
-                            st.markdown(f"""
-                            <div style="border-left: 4px solid {severity_color}; padding-left: 1rem; margin: 1rem 0;">
-                                <h4>{severity_icons.get(issue['Severity'], '')} {issue['Type']}</h4>
-                                <p><strong>URL:</strong> <a href="{issue['URL']}" target="_blank">{issue['URL']}</a></p>
-                                <p><strong>Issue:</strong> {issue['Description']}</p>
-                                <p><strong>Impact:</strong> {issue['Impact']}</p>
-                                <p><strong>Fix:</strong> {issue['Fix']}</p>
-                                <p><strong>Category:</strong> {issue['Category']}</p>
-                            </div>
-                            """, unsafe_allow_html=True)
+                filtered_issues = issues
+                if severity_filter != "All":
+                    filtered_issues = [i for i in issues if i['Severity'] == severity_filter]
+                
+                st.markdown(f"**Showing {len(filtered_issues)} of {len(issues)} issues**")
+                
+                # Display issues
+                for issue in filtered_issues:
+                    severity_color = {
+                        'Critical': '#dc3545',
+                        'High': '#fd7e14', 
+                        'Medium': '#ffc107',
+                        'Low': '#28a745'
+                    }.get(issue['Severity'], '#6c757d')
+                    
+                    with st.expander(f"🔴 {issue['Type']} - {issue['URL'][:50]}..."):
+                        col1, col2 = st.columns([1, 3])
+                        with col1:
+                            st.markdown(f"**Severity:** <span style='color: {severity_color}'>{issue['Severity']}</span>", unsafe_allow_html=True)
+                            st.markdown(f"**Category:** {issue['Category']}")
+                        with col2:
+                            st.markdown(f"**Description:** {issue['Description']}")
+                            st.markdown(f"**Impact:** {issue['Impact']}")
+                            st.markdown(f"**Fix:** {issue['Fix']}")
             else:
-                st.success("🎉 No issues found with the current filters!")
+                st.success("🎉 No SEO issues found! Your site is in great shape.")
         
         with tab5:
             st.markdown("### Crawl Statistics")
             
-            # Display crawl stats if available
-            if hasattr(st.session_state, 'crawler_stats'):
+            if st.session_state.crawler_stats:
                 stats = st.session_state.crawler_stats
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.markdown("#### Crawl Settings")
+                    st.markdown("#### Crawl Configuration")
+                    st.write(f"**Total Pages:** {stats['total_pages']}")
+                    st.write(f"**Skipped URLs:** {stats['skipped_urls']}")
                     st.write(f"**Robots.txt Status:** {stats['robots_txt_status']}")
-                    st.write(f"**Crawl Delay Used:** {stats['crawl_delay_used']}")
-                    st.write(f"**Total Pages Found:** {stats['total_pages']}")
-                    st.write(f"**URLs Skipped:** {stats['skipped_urls']}")
-                    
-                    # Show sitemap info if available
-                    if hasattr(st.session_state, 'crawl_results') and st.session_state.crawl_results:
-                        temp_crawler = SEOCrawler("temp")
-                        if hasattr(temp_crawler, 'sitemap_status'):
-                            st.write(f"**Sitemap Status:** {temp_crawler.sitemap_status}")
+                    st.write(f"**Crawl Delay:** {stats['crawl_delay_used']}")
                 
                 with col2:
-                    st.markdown("#### Pattern Examples")
-                    st.code("""
-# Include patterns (wildcards):
-/blog/*
-/products/*
-
-# Exclude patterns (wildcards):
-/admin/*
-*?utm_*
-
-# Regex patterns:
-^https://example.com/important/.*
-.*\\.pdf$
-                    """)
-            
-            # Show skipped URLs if any
-            if hasattr(st.session_state, 'crawler_stats') and st.session_state.crawler_stats['skipped_urls'] > 0:
-                st.markdown("#### Skipped URLs")
-                st.info("URLs that were found but not crawled due to filtering rules")
+                    st.markdown("#### Performance Metrics")
+                    if 'Load_Time' in results_df.columns:
+                        load_times = results_df['Load_Time'].dropna()
+                        if len(load_times) > 0:
+                            st.write(f"**Avg Load Time:** {load_times.mean():.2f}s")
+                            st.write(f"**Min Load Time:** {load_times.min():.2f}s")
+                            st.write(f"**Max Load Time:** {load_times.max():.2f}s")
+                
+                # Load time distribution chart
+                if 'Load_Time' in results_df.columns:
+                    load_times = results_df['Load_Time'].dropna()
+                    if len(load_times) > 0:
+                        fig = px.histogram(
+                            x=load_times,
+                            nbins=20,
+                            title="Page Load Time Distribution",
+                            labels={'x': 'Load Time (seconds)', 'y': 'Number of Pages'}
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
         
         with tab6:
-            st.markdown("### Export Results")
+            st.markdown("### Export Data")
             
-            # Prepare CSV with all required columns
-            csv_columns = [
-                'Address', 'Content Type', 'Status Code', 'Indexability',
-                'Title tag', 'Title tag Length', 'Meta Description', 
-                'Meta Description Length', 'H1-1', 'H1-1 Length',
-                'H2-1', 'H2-1 Length', 'H2-2', 'H2-2 Length',
-                'Meta Robots 1', 'Canonical Link Element 1', 'Word Count',
-                'Flesch Reading Ease Score', 'Readability', 'Crawl Depth',
-                'Inlinks', 'Unique Inlinks'
-            ]
-            
-            # Ensure all columns exist
-            for col in csv_columns:
-                if col not in results_df.columns:
-                    results_df[col] = ''
-            
-            # Convert to CSV
-            csv = results_df[csv_columns].to_csv(index=False)
-            
-            # Download button
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"seo_crawl_{timestamp}.csv"
-            
+            # CSV Export
+            csv_data = results_df.to_csv(index=False)
             st.download_button(
-                label="📥 Download CSV Report",
-                data=csv,
-                file_name=filename,
+                label="📥 Download CSV",
+                data=csv_data,
+                file_name=f"seo_crawl_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
                 use_container_width=True
             )
             
+            # Issues Export
+            if issues:
+                issues_df = pd.DataFrame(issues)
+                issues_csv = issues_df.to_csv(index=False)
+                st.download_button(
+                    label="📥 Download Issues CSV",
+                    data=issues_csv,
+                    file_name=f"seo_issues_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            
             st.markdown("---")
-            st.markdown("#### Preview")
-            st.dataframe(results_df[csv_columns].head(10), use_container_width=True)
+            st.markdown("#### Export Options")
+            st.info("💡 **Tip:** Use the CSV export to analyze data in Excel, Google Sheets, or other tools.")
 
 if __name__ == "__main__":
     main()
