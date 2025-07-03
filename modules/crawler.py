@@ -106,9 +106,12 @@ class SEOCrawler:
                 
         return True
     
-    async def fetch_and_parse_robots_txt(self):
+    async def fetch_and_parse_robots_txt(self, init_progress_callback=None):
         """Fetch and parse robots.txt"""
         robots_url = f"{urlparse(self.start_url).scheme}://{self.domain}/robots.txt"
+        
+        if init_progress_callback:
+            init_progress_callback(20, "📋 Fetching robots.txt...")
         
         try:
             async with self.session.get(
@@ -132,13 +135,21 @@ class SEOCrawler:
                             except:
                                 pass
                     
+                    if init_progress_callback:
+                        init_progress_callback(40, "✅ Robots.txt fetched successfully")
+                    
                     # Extract sitemap URLs from robots.txt
                     if self.use_sitemap:
-                        await self._extract_sitemaps_from_robots(robots_content)
+                        await self._extract_sitemaps_from_robots(robots_content, init_progress_callback)
+                else:
+                    if init_progress_callback:
+                        init_progress_callback(40, "⚠️ No robots.txt found, continuing...")
         except Exception as e:
+            if init_progress_callback:
+                init_progress_callback(40, f"⚠️ Could not fetch robots.txt: {str(e)}")
             print(f"Could not fetch robots.txt: {e}")
     
-    async def _extract_sitemaps_from_robots(self, robots_content: str):
+    async def _extract_sitemaps_from_robots(self, robots_content: str, init_progress_callback=None):
         """Extract sitemap URLs from robots.txt"""
         sitemap_urls = []
         for line in robots_content.split('\n'):
@@ -157,9 +168,26 @@ class SEOCrawler:
         # Combine and deduplicate
         all_sitemaps = list(set(sitemap_urls + common_sitemaps))
         
+        if init_progress_callback:
+            if sitemap_urls:
+                init_progress_callback(50, f"🗺️ Found {len(sitemap_urls)} sitemaps in robots.txt")
+            else:
+                init_progress_callback(50, "🗺️ Checking common sitemap locations...")
+        
         # Fetch and parse each sitemap
-        for sitemap_url in all_sitemaps:
+        for i, sitemap_url in enumerate(all_sitemaps):
+            if init_progress_callback:
+                progress = 50 + (40 * (i + 1) / len(all_sitemaps))  # 50-90% range
+                sitemap_name = sitemap_url.split('/')[-1]
+                init_progress_callback(int(progress), f"🗺️ Processing sitemap {i+1}/{len(all_sitemaps)}: {sitemap_name}")
+            
             await self._fetch_and_parse_sitemap(sitemap_url)
+        
+        if init_progress_callback:
+            if self.sitemap_urls:
+                init_progress_callback(90, f"✅ Discovered {len(self.sitemap_urls)} URLs from sitemaps")
+            else:
+                init_progress_callback(90, "⚠️ No sitemap URLs found")
     
     async def _fetch_and_parse_sitemap(self, sitemap_url: str):
         """Fetch and parse a single sitemap"""
@@ -543,11 +571,14 @@ class SEOCrawler:
         else:
             return random.uniform(self.delay_range[0], self.delay_range[1])
     
-    async def crawl(self, progress_callback=None):
+    async def crawl(self, progress_callback=None, init_progress_callback=None):
         """Main crawl method with hybrid sitemap integration"""
         # Create session with cookie jar for session management
         connector = aiohttp.TCPConnector(ssl=self._get_ssl_context())
         timeout = aiohttp.ClientTimeout(total=self.request_timeout)
+        
+        if init_progress_callback:
+            init_progress_callback(10, "🔧 Setting up crawler session...")
         
         async with aiohttp.ClientSession(
             connector=connector,
@@ -558,14 +589,18 @@ class SEOCrawler:
             
             # Fetch and parse robots.txt first (this also fetches sitemaps)
             if self.respect_robots or self.use_sitemap:
-                await self.fetch_and_parse_robots_txt()
+                await self.fetch_and_parse_robots_txt(init_progress_callback)
                 self.robots_txt_status = "Fetched and parsed"
             else:
+                if init_progress_callback:
+                    init_progress_callback(90, "⚠️ Robots.txt and sitemaps disabled")
                 self.robots_txt_status = "Ignored (disabled)"
                 self.sitemap_status = "Disabled"
             
             # If sitemap is enabled but robots.txt didn't have sitemaps, try common locations
             if self.use_sitemap and not self.sitemap_urls:
+                if init_progress_callback:
+                    init_progress_callback(95, "🗺️ Trying common sitemap locations...")
                 await self._try_common_sitemap_locations()
             
             # Create sitemap queue (lower priority than discovered URLs)
@@ -576,6 +611,10 @@ class SEOCrawler:
                     normalized_url = self._normalize_url(url)
                     if normalized_url not in self.visited_urls:
                         sitemap_queue.append((normalized_url, 0))
+            
+            if init_progress_callback:
+                total_urls = len(self.to_visit) + len(sitemap_queue)
+                init_progress_callback(100, f"🚀 Starting crawl with {total_urls} URLs ready...")
             
             pages_crawled = 0
             

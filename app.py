@@ -311,7 +311,7 @@ def generate_executive_summary(results_df, issues, issue_summary):
 
 async def run_crawl(url, max_pages, max_depth, include_patterns, exclude_patterns, 
                    ignore_noindex, request_timeout, delay_range, respect_robots, 
-                   follow_redirects, use_sitemap, progress_placeholder, status_placeholder):
+                   follow_redirects, use_sitemap, init_progress_bar, init_status_text):
     """Run the crawler asynchronously"""
     # Parse patterns
     include_list = [p.strip() for p in include_patterns.split('\n') if p.strip()] if include_patterns else []
@@ -331,12 +331,16 @@ async def run_crawl(url, max_pages, max_depth, include_patterns, exclude_pattern
         use_sitemap=use_sitemap
     )
     
+    def init_progress_callback(progress, status):
+        init_progress_bar.progress(progress / 100)
+        init_status_text.text(status)
+    
     def progress_callback(current, total, current_url):
         progress = current / total
         st.session_state.crawl_progress = progress
         st.session_state.current_url = current_url
     
-    results = await crawler.crawl(progress_callback)
+    results = await crawler.crawl(progress_callback, init_progress_callback)
     return results, crawler
 
 def main():
@@ -491,44 +495,47 @@ def main():
             progress_placeholder = st.empty()
             status_placeholder = st.empty()
             
-            # Run the crawl
-            with st.spinner("Initializing crawler..."):
-                try:
-                    # Validate delay range
-                    if delay_min > delay_max:
-                        st.error("Min delay cannot be greater than max delay")
-                        st.session_state.crawl_in_progress = False
-                        return
-                    
-                    # Run async crawl
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    results, crawler = loop.run_until_complete(
-                        run_crawl(
-                            processed_url, max_pages, max_depth, 
-                            include_patterns, exclude_patterns,
-                            ignore_noindex, request_timeout, 
-                            (delay_min, delay_max), respect_robots, 
-                            follow_redirects, use_sitemap,
-                            progress_placeholder, status_placeholder
-                        )
+            # Validate delay range
+            if delay_min > delay_max:
+                st.error("Min delay cannot be greater than max delay")
+                st.session_state.crawl_in_progress = False
+                return
+            
+            # Create initialization progress components
+            st.markdown("### 🔧 Initializing Crawler")
+            init_progress_bar = st.progress(0)
+            init_status_text = st.empty()
+            
+            try:
+                # Run async crawl
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                results, crawler = loop.run_until_complete(
+                    run_crawl(
+                        processed_url, max_pages, max_depth, 
+                        include_patterns, exclude_patterns,
+                        ignore_noindex, request_timeout, 
+                        (delay_min, delay_max), respect_robots, 
+                        follow_redirects, use_sitemap,
+                        init_progress_bar, init_status_text
                     )
-                    
-                    st.session_state.crawl_results = results
-                    st.session_state.crawler_stats = crawler.get_crawl_stats()
-                    st.session_state.crawl_in_progress = False
-                    
-                    # Enhanced success message with sitemap info
-                    stats = crawler.get_crawl_stats()
-                    sitemap_info = ""
-                    if hasattr(crawler, 'urls_from_sitemap') and crawler.urls_from_sitemap > 0:
-                        sitemap_info = f" ({crawler.urls_from_crawling} discovered, {crawler.urls_from_sitemap} from sitemap)"
-                    
-                    st.success(f"✅ Crawl completed! Found {stats['total_pages']} pages{sitemap_info}. Skipped {stats['skipped_urls']} URLs.")
-                    
-                except Exception as e:
-                    st.session_state.crawl_in_progress = False
-                    st.error(f"❌ Crawl failed: {str(e)}")
+                )
+                
+                st.session_state.crawl_results = results
+                st.session_state.crawler_stats = crawler.get_crawl_stats()
+                st.session_state.crawl_in_progress = False
+                
+                # Enhanced success message with sitemap info
+                stats = crawler.get_crawl_stats()
+                sitemap_info = ""
+                if hasattr(crawler, 'urls_from_sitemap') and crawler.urls_from_sitemap > 0:
+                    sitemap_info = f" ({crawler.urls_from_crawling} discovered, {crawler.urls_from_sitemap} from sitemap)"
+                
+                st.success(f"✅ Crawl completed! Found {stats['total_pages']} pages{sitemap_info}. Skipped {stats['skipped_urls']} URLs.")
+                
+            except Exception as e:
+                st.session_state.crawl_in_progress = False
+                st.error(f"❌ Crawl failed: {str(e)}")
     
     # Display progress if crawling
     if st.session_state.crawl_in_progress:
