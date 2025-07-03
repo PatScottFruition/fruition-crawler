@@ -299,7 +299,11 @@ class SEOCrawler:
                 # Only parse HTML content
                 if 'text/html' in page_data['Content Type']:
                     html = await response.text()
-                    soup = BeautifulSoup(html, 'lxml')
+                    # Use html.parser as primary (built-in), fallback to lxml if available
+                    try:
+                        soup = BeautifulSoup(html, 'html.parser')
+                    except:
+                        soup = BeautifulSoup(html, 'lxml')
                     
                     # Extract SEO elements
                     page_data.update(self._extract_seo_data(soup, html))
